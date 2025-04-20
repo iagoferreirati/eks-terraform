@@ -1,0 +1,1 @@
+https://github.com/terraform-aws-modules/terraform-aws-eks/blob/v20.36.0/examples/eks-managed-node-group/eks-al2.tf
