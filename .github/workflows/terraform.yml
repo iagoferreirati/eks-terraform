@@ -1,0 +1,180 @@
+name: 'Terraform Deploy'
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  TF_VERSION: '1.5.0'
+  AWS_REGION: 'us-east-1'
+
+jobs:
+  terraform-plan:
+    name: 'Terraform Plan'
+    runs-on: ubuntu-latest
+    
+    defaults:
+      run:
+        working-directory: ./vpc
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Terraform Format Check
+      run: terraform fmt -check -recursive
+
+    - name: Terraform Init
+      run: terraform init
+
+    - name: Terraform Validate
+      run: terraform validate
+
+    - name: Terraform Plan
+      run: terraform plan -var-file="vars/development.tfvars" -out=tfplan
+      if: github.event_name == 'pull_request'
+
+    - name: Upload Terraform Plan
+      uses: actions/upload-artifact@v4
+      with:
+        name: terraform-plan
+        path: ./vpc/tfplan
+      if: github.event_name == 'pull_request'
+
+  terraform-apply:
+    name: 'Terraform Apply'
+    runs-on: ubuntu-latest
+    needs: terraform-plan
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    defaults:
+      run:
+        working-directory: ./vpc
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Terraform Init
+      run: terraform init
+
+    - name: Terraform Apply
+      run: terraform apply -var-file="vars/development.tfvars" -auto-approve
+
+    - name: Get VPC Outputs
+      run: |
+        VPC_ID=$(terraform output -raw vpc_id)
+        PUBLIC_SUBNETS=$(terraform output -raw public_subnets)
+        PRIVATE_SUBNETS=$(terraform output -raw private_subnets)
+        echo "VPC_ID=$VPC_ID" >> $GITHUB_ENV
+        echo "PUBLIC_SUBNETS=$PUBLIC_SUBNETS" >> $GITHUB_ENV
+        echo "PRIVATE_SUBNETS=$PRIVATE_SUBNETS" >> $GITHUB_ENV
+
+  eks-deploy:
+    name: 'EKS Deploy'
+    runs-on: ubuntu-latest
+    needs: terraform-apply
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    defaults:
+      run:
+        working-directory: ./eks
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+
+    - name: Terraform Init
+      run: terraform init
+
+    - name: Update tfvars with VPC outputs
+      run: |
+        # Update vpc_id
+        sed -i "s/vpc_id = \"vpc-\"/vpc_id = \"${{ needs.terraform-apply.outputs.VPC_ID }}\"/" vars/development.tfvars
+        
+        # Update subnet_ids (assuming first 2 public subnets)
+        PUBLIC_SUBNETS_ARRAY=(${{ needs.terraform-apply.outputs.PUBLIC_SUBNETS }})
+        sed -i "s/subnet_ids = \[\"subnet-\", \"subnet-\"\]/subnet_ids = [\"${PUBLIC_SUBNETS_ARRAY[0]}\", \"${PUBLIC_SUBNETS_ARRAY[1]}\"]/" vars/development.tfvars
+        
+        # Update subnet_ids_private (assuming first 2 private subnets)
+        PRIVATE_SUBNETS_ARRAY=(${{ needs.terraform-apply.outputs.PRIVATE_SUBNETS }})
+        sed -i "s/subnet_ids_private = \[\"subnet-04841e42df460e856\"\]/subnet_ids_private = [\"${PRIVATE_SUBNETS_ARRAY[0]}\", \"${PRIVATE_SUBNETS_ARRAY[1]}\"]/" vars/development.tfvars
+
+    - name: Terraform Apply EKS
+      run: terraform apply -var-file="vars/development.tfvars" -auto-approve
+
+    - name: Configure kubectl
+      run: |
+        aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name iago-services-development
+
+    - name: Verify EKS Cluster
+      run: |
+        kubectl get nodes
+        kubectl get pods --all-namespaces
+
+  security-scan:
+    name: 'Security Scan'
+    runs-on: ubuntu-latest
+    needs: [terraform-plan, eks-deploy]
+    if: always()
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif' 

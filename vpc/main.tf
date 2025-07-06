@@ -1,34 +1,22 @@
 provider "aws" {
-  region = local.region
+  region = local.region  # Define a região AWS a ser usada, obtida da variável local
 }
 
-data "aws_availability_zones" "available" {}
+data "aws_availability_zones" "available" {}  # Obtém informações sobre as zonas de disponibilidade na região atual
 
-variable "vpc_cidr" {}
-variable "region" {}
-variable "tags" {
-  type        = map(string)
-}
-
-variable "vpc_cidr_services" {}
-variable "tags_services" {
-  type        = map(string)
+variable "vpc_cidr" {}  # Variável para o bloco CIDR da VPC principal
+variable "region" {}    # Variável para a região AWS a ser configurada
+variable "tags" {       # Variável para tags que serão aplicadas nos recursos
+  type = map(string)
 }
 
 
 locals {
-  name   = "eks-${basename(path.cwd)}"
-  region = var.region
-  vpc_cidr = var.vpc_cidr
-  azs      = slice(data.aws_availability_zones.available.names, 0, 3)
-  tags = var.tags
-
-################################################################################
-
-  name_services   = "services-${basename(path.cwd)}"
-  vpc_cidr_services = var.vpc_cidr_services
-  azs_services      = slice(data.aws_availability_zones.available.names, 0, 3)
-  tags_services = var.tags_services  
+  name = "eks"  # Define o nome da VPC principal baseado no diretório atual
+  region = var.region                  # Atribui a região da variável para o local
+  vpc_cidr = var.vpc_cidr             # Atribui o bloco CIDR da VPC principal para o local
+  azs = slice(data.aws_availability_zones.available.names, 0, 3)  # Obtém os nomes das três primeiras zonas de disponibilidade na região
+  tags = var.tags                     # Atribui as tags da variável para o local
 }
 
 ################################################################################
@@ -36,33 +24,28 @@ locals {
 ################################################################################
 
 module "vpc" {
-  source = "terraform-aws-modules/vpc/aws"
-  version = "5.8.1"
-  name = local.name
-  cidr = local.vpc_cidr
+  source = "terraform-aws-modules/vpc/aws"  # Utiliza o módulo Terraform AWS para criar uma VPC
+  version = "6.0.1"                         # Versão específica do módulo a ser utilizada
 
-  azs             = local.azs
+  name = local.name          # Nome da VPC definido localmente
+  cidr = local.vpc_cidr     # Bloco CIDR da VPC definido localmente
+
+  azs = local.azs  # Zonas de disponibilidade definidas localmente
+  # Subnets privadas são criadas com blocos CIDR diferentes dentro da VPC principal
   private_subnets = [for k, v in local.azs : cidrsubnet(local.vpc_cidr, 4, k)]
-  public_subnets  = [for k, v in local.azs : cidrsubnet(local.vpc_cidr, 4, k + 8)]
+  # Subnets públicas são criadas com blocos CIDR diferentes dentro da VPC principal
+  public_subnets = [for k, v in local.azs : cidrsubnet(local.vpc_cidr, 4, k + 8)]
 
-  single_nat_gateway = true
-  enable_nat_gateway = true
+  single_nat_gateway = true  # Usa um único gateway NAT para todas as subnets
+  enable_nat_gateway = true  # Habilita o uso de NAT gateway
 
-  tags = local.tags
-}
+  private_subnet_tags = {
+    private = "true"
+  }
 
-module "vpc_services" {
-  source = "terraform-aws-modules/vpc/aws"
-  version = "5.8.1"
-  name = local.name_services
-  cidr = local.vpc_cidr_services
+  public_subnet_tags = {
+    public = "true"
+  }
 
-  azs             = local.azs_services
-  private_subnets = [for k, v in local.azs_services : cidrsubnet(local.vpc_cidr_services, 4, k)]
-  public_subnets  = [for k, v in local.azs_services : cidrsubnet(local.vpc_cidr_services, 4, k + 8)]
-
-  single_nat_gateway = true
-  enable_nat_gateway = true
-
-  tags = local.tags_services
+  tags = local.tags  # Aplica as tags definidas localmente aos recursos criados pela VPC
 }
