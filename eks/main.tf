@@ -112,7 +112,11 @@ module "eks" {
     aws-ebs-csi-driver = {
       addon_version = "v1.37.0-eksbuild.1"  # Versão do driver AWS EBS CSI
       resolve_conflicts="PRESERVE"  # Resolve conflitos preservando a configuração atual
-    }        
+    }
+    eks-pod-identity-agent = {
+        addon_version = "v1.3.8-eksbuild.2"  # Versão do driver AWS EBS CSI
+        resolve_conflicts="PRESERVE"  # Resolve conflitos preservando a configuração atual
+      }           
   }
 
   # Configuração da VPC e subnets do cluster
@@ -137,9 +141,9 @@ module "eks" {
     services = {
       ami_type = "AL2023_x86_64_STANDARD"  # Tipo de AMI para arquitetura x86_64
       ami_id       = data.aws_ami.eks_default.image_id  # ID da imagem do EKS para x86_64
-      min_size     = 2  # Tamanho mínimo do grupo de nós
+      min_size     = 1  # Tamanho mínimo do grupo de nós
       max_size     = 4  # Tamanho máximo do grupo de nós
-      desired_size = 2  # Tamanho desejado do grupo de nós
+      desired_size = 1  # Tamanho desejado do grupo de nós
       enable_bootstrap_user_data = true  # Habilita o uso de dados de bootstrap para os nós
       subnet_ids                 = data.aws_subnets.private.ids  # IDs das subnets privadas para os nós
       instance_types             = var.instance_types_service  # Tipos de instâncias para os nós

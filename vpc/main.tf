@@ -41,10 +41,12 @@ module "vpc" {
 
   private_subnet_tags = {
     private = "true"
+    "kubernetes.io/role/internal-elb" = "1"
   }
 
   public_subnet_tags = {
     public = "true"
+    "kubernetes.io/role/elb" = "1"
   }
 
   tags = local.tags  # Aplica as tags definidas localmente aos recursos criados pela VPC
